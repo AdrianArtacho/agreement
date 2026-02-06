@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Agreement URL Helper</title>
+
+<style>
+  body {
+    background: #111;
+    color: #eee;
+    font-family: sans-serif;
+    margin: 0;
+    padding: 30px;
+  }
+
+  h1 {
+    font-size: 20px;
+    margin-bottom: 20px;
+  }
+
+  label {
+    display: block;
+    margin-top: 16px;
+    font-size: 14px;
+    color: #ccc;
+  }
+
+  input {
+    width: 100%;
+    padding: 8px;
+    margin-top: 6px;
+    background: #1c1c1c;
+    border: 1px solid #444;
+    color: #eee;
+    font-size: 14px;
+  }
+
+  button {
+    margin-top: 20px;
+    padding: 8px 14px;
+    background: #222;
+    border: 1px solid #555;
+    color: #eee;
+    font-size: 14px;
+    cursor: pointer;
+  }
+
+  button:hover {
+    background: #333;
+  }
+
+  #output {
+    margin-top: 20px;
+    padding: 10px;
+    background: #0d0d0d;
+    border: 1px solid #333;
+    font-size: 13px;
+    word-break: break-all;
+  }
+
+  #copyBtn {
+    margin-left: 10px;
+  }
+</style>
+</head>
+
+<body>
+
+<h1>Agreement Visualization URL Helper</h1>
+
+<label>
+  CSV URL (raw, unencoded)
+  <input id="csv" type="text" placeholder="https://raw.githubusercontent.com/.../file.csv">
+</label>
+
+<label>
+  Title (optional)
+  <input id="title" type="text" placeholder="Experiment 17 – Modality Agreement">
+</label>
+
+<label>
+  Link (optional)
+  <input id="link" type="text" placeholder="https://researchcatalogue.net/view/...">
+</label>
+
+<button onclick="generate()">Generate URL</button>
+<button id="copyBtn" onclick="copy()" style="display:none;">Copy</button>
+
+<div id="output"></div>
+
+<script>
+function generate() {
+  const base = location.href.replace(/helper\.html.*/, "");
+  const csv   = document.getElementById("csv").value.trim();
+  const title = document.getElementById("title").value.trim();
+  const link  = document.getElementById("link").value.trim();
+
+  if (!csv) {
+    alert("CSV URL is required.");
+    return;
+  }
+
+  const params = new URLSearchParams();
+  params.set("csv", csv);
+
+  if (title) params.set("title", title);
+  if (link)  params.set("link", link);
+
+  const url = base + "?" + params.toString();
+
+  const out = document.getElementById("output");
+  out.textContent = url;
+
+  document.getElementById("copyBtn").style.display = "inline-block";
+}
+
+function copy() {
+  const text = document.getElementById("output").textContent;
+  navigator.clipboard.writeText(text).then(() => {
+    alert("URL copied to clipboard");
+  });
+}
+</script>
+
+</body>
+</html>
