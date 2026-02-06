@@ -67,14 +67,15 @@ const LINK  = params.get("link");
 
 const titleDiv = document.getElementById("title");
 if (TITLE) {
+  const t = decodeURIComponent(TITLE);
   if (LINK) {
     const a = document.createElement("a");
     a.href = decodeURIComponent(LINK);
     a.target = "_blank";
-    a.textContent = decodeURIComponent(TITLE);
+    a.textContent = t;
     titleDiv.appendChild(a);
   } else {
-    titleDiv.textContent = decodeURIComponent(TITLE);
+    titleDiv.textContent = t;
   }
 }
 
@@ -113,13 +114,14 @@ const originalPositions = {};
 
 let rows=[], timeValues=[], pairKeys=[], modalities=[];
 let currentTime = 0;
-let isPlaying = true;
 let direction = 1;
 
-let focused = null;
-let rotationSpeed = 0;   // <-- STEADY ROTATION SPEED
-
+let rotationSpeed = 0;
 const ROTATION_MAX = 0.015;
+
+const EDGE_MIN = 0.015;
+const EDGE_MAX = 0.10;
+const NODE_RADIUS = 0.22;
 
 const raycaster = new THREE.Raycaster();
 const mouse = new THREE.Vector2();
@@ -182,6 +184,7 @@ fetch(CSV_URL).then(r=>r.text()).then(t=>{
 ============================================================ */
 
 function init(){
+
   modalities.forEach((name,i)=>{
     const phi=Math.acos(1-2*(i+0.5)/modalities.length);
     const theta=Math.PI*(1+Math.sqrt(5))*i;
@@ -192,7 +195,7 @@ function init(){
     );
 
     const node=new THREE.Mesh(
-      new THREE.SphereGeometry(0.22,24,24),
+      new THREE.SphereGeometry(NODE_RADIUS,24,24),
       new THREE.MeshBasicMaterial({ color: modalityColor(modalityDisplayName(name)) })
     );
     node.position.copy(pos);
@@ -206,31 +209,114 @@ function init(){
     labels[name]=lbl;
   });
 
+  pairKeys.forEach(k=>{
+    const geom=new THREE.CylinderGeometry(1,1,1,16,1,true);
+    geom.setAttribute(
+      "color",
+      new THREE.BufferAttribute(new Float32Array(geom.attributes.position.count*3),3)
+    );
+    const mat=new THREE.MeshBasicMaterial({
+      vertexColors:true,
+      transparent:true,
+      opacity:0.2
+    });
+    const m=new THREE.Mesh(geom,mat);
+    group.add(m);
+    edges[k]=m;
+  });
+
+  setupUI();
   animate();
 }
 
 /* ============================================================
-   Click handling
+   Cylinders
 ============================================================ */
 
-window.addEventListener("click", (e)=>{
+function updateEdgeCylinder(edge,p1,p2,c1,c2,thickness){
+  const dir=new THREE.Vector3().subVectors(p2,p1);
+  const len=dir.length();
+  if(len<=2*NODE_RADIUS){ edge.visible=false; return; }
+  dir.normalize();
+  const usable=len-2*NODE_RADIUS;
+  edge.position.copy(p1).addScaledVector(dir,NODE_RADIUS+usable/2);
+  edge.scale.set(thickness,usable,thickness);
+  edge.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0),dir);
+
+  const col=edge.geometry.attributes.color.array;
+  const pos=edge.geometry.attributes.position.array;
+  for(let i=0;i<pos.length;i+=3){
+    const t=pos[i+1]+0.5;
+    const cc=c1.clone().lerp(c2,t);
+    col[i]=cc.r; col[i+1]=cc.g; col[i+2]=cc.b;
+  }
+  edge.geometry.attributes.color.needsUpdate=true;
+}
+
+function updateEdges(t){
+  let idx=0,best=1e9;
+  for(let i=0;i<timeValues.length;i++){
+    const d=Math.abs(timeValues[i]-t);
+    if(d<best){best=d;idx=i;}
+  }
+
+  document.getElementById("timeLabel").textContent =
+    `t = ${(timeValues[idx]/10).toFixed(2)} sec`;
+
+  pairKeys.forEach(k=>{
+    const v=rows[idx]?.[k];
+    const e=edges[k];
+    if(!isFinite(v)){ e.visible=false; return; }
+    e.visible=true;
+    const [a,b]=k.split("__");
+    const thick=EDGE_MIN+Math.pow(v,1.3)*(EDGE_MAX-EDGE_MIN);
+    updateEdgeCylinder(
+      e,
+      nodes[a].position,
+      nodes[b].position,
+      nodes[a].material.color,
+      nodes[b].material.color,
+      thick
+    );
+    e.material.opacity=0.15+0.85*v;
+  });
+}
+
+/* ============================================================
+   Interaction
+============================================================ */
+
+window.addEventListener("click",(e)=>{
   mouse.x=(e.clientX/innerWidth)*2-1;
   mouse.y=-(e.clientY/innerHeight)*2+1;
   raycaster.setFromCamera(mouse,camera);
 
   const hits=raycaster.intersectObjects(Object.values(nodes));
   if(hits.length){
-    // click node → stop rotation
-    rotationSpeed = 0;
-    focused = null;
+    rotationSpeed=0;
     return;
   }
 
-  // click empty → start steady rotation
   const dist=Math.min(Math.sqrt(mouse.x*mouse.x+mouse.y*mouse.y),1);
   const dir=mouse.x>=0?1:-1;
-  rotationSpeed = dir * dist * ROTATION_MAX;
+  rotationSpeed=dir*dist*ROTATION_MAX;
 });
+
+/* ============================================================
+   UI
+============================================================ */
+
+function setupUI(){
+  const s=document.getElementById("timeSlider");
+  s.min=timeValues[0];
+  s.max=timeValues.at(-1);
+  s.step=(s.max-s.min)/1000;
+  s.value=currentTime;
+  s.oninput=()=>{
+    currentTime=parseFloat(s.value);
+    updateEdges(currentTime);
+  };
+}
 
 /* ============================================================
    Animation
@@ -241,13 +327,14 @@ function animate(now=performance.now()){
   requestAnimationFrame(animate);
   const dt=(now-last)/1000; last=now;
 
-  // timeline autoplay
-  currentTime += direction*dt*10;
+  currentTime+=direction*dt*10;
   if(currentTime>=timeValues.at(-1)){currentTime=timeValues.at(-1);direction=-1;}
   if(currentTime<=timeValues[0]){currentTime=timeValues[0];direction=1;}
 
-  // STEADY rotation
-  group.rotation.y += rotationSpeed;
+  document.getElementById("timeSlider").value=currentTime;
+  updateEdges(currentTime);
+
+  group.rotation.y+=rotationSpeed;
 
   Object.values(labels).forEach(l=>{
     const d=camera.position.distanceTo(l.position);
