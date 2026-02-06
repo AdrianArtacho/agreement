@@ -19,7 +19,6 @@
     left: 50%;
     transform: translateX(-50%);
     font-size: 18px;
-    text-align: center;
     z-index: 10;
   }
 
@@ -29,38 +28,13 @@
     border-bottom: 1px solid #666;
   }
 
-  #title a:hover {
-    border-bottom-color: #aaa;
-  }
-
   #ui {
     position: absolute;
     bottom: 20px;
     left: 50%;
     transform: translateX(-50%);
     width: 80%;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
     z-index: 10;
-  }
-
-  #controls {
-    display: flex;
-    justify-content: center;
-    gap: 12px;
-  }
-
-  button {
-    background: #222;
-    color: #eee;
-    border: 1px solid #555;
-    padding: 4px 10px;
-    cursor: pointer;
-  }
-
-  button:hover {
-    background: #333;
   }
 
   #timeLabel {
@@ -77,61 +51,56 @@
 <div id="ui">
   <div id="timeLabel">t = 0.00 sec</div>
   <input id="timeSlider" type="range">
-  <div id="controls">
-    <button id="playBtn">⏸ Pause</button>
-  </div>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
 
 <script>
 /* ============================================================
-   URL PARAMETERS
+   URL params
 ============================================================ */
 
 const params = new URLSearchParams(window.location.search);
 const CSV_URL = params.get("csv") || "modality_agreement_timeseries.csv";
-const TITLE   = params.get("title");
-const LINK    = params.get("link");
+const TITLE = params.get("title");
+const LINK  = params.get("link");
 
 const titleDiv = document.getElementById("title");
 if (TITLE) {
-  const t = decodeURIComponent(TITLE);
   if (LINK) {
     const a = document.createElement("a");
     a.href = decodeURIComponent(LINK);
     a.target = "_blank";
-    a.rel = "noopener noreferrer";
-    a.textContent = t;
+    a.textContent = decodeURIComponent(TITLE);
     titleDiv.appendChild(a);
   } else {
-    titleDiv.textContent = t;
+    titleDiv.textContent = decodeURIComponent(TITLE);
   }
 }
 
 /* ============================================================
-   SCENE / CAMERA / RENDERER
+   Scene
 ============================================================ */
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x111111);
 
-const camera = new THREE.PerspectiveCamera(70, innerWidth / innerHeight, 0.1, 100);
-camera.position.set(0, 0, 7);
+const camera = new THREE.PerspectiveCamera(70, innerWidth/innerHeight, 0.1, 100);
+camera.position.set(0,0,7);
 
-const renderer = new THREE.WebGLRenderer({ antialias: true });
+const renderer = new THREE.WebGLRenderer({ antialias:true });
 renderer.setSize(innerWidth, innerHeight);
 renderer.setPixelRatio(window.devicePixelRatio);
 document.body.appendChild(renderer.domElement);
 
 addEventListener("resize", () => {
-  camera.aspect = innerWidth / innerHeight;
+  camera.aspect = innerWidth/innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
 });
 
 /* ============================================================
-   GLOBALS
+   Globals
 ============================================================ */
 
 const group = new THREE.Group();
@@ -142,38 +111,26 @@ const labels = {};
 const edges = {};
 const originalPositions = {};
 
-let rows = [], timeValues = [], pairKeys = [], modalities = [];
-
-const SPHERE_RADIUS = 2.6;
-const NODE_RADIUS   = 0.22;
-const EDGE_MIN = 0.015;
-const EDGE_MAX = 0.10;
-const FOCUS_DEPTH = 3.0;
-
+let rows=[], timeValues=[], pairKeys=[], modalities=[];
 let currentTime = 0;
 let isPlaying = true;
 let direction = 1;
-const playSpeed = 1.0;
 
 let focused = null;
-const targetQuat = new THREE.Quaternion();
-const IDENTITY_QUAT = new THREE.Quaternion();
-const targetPos = new THREE.Vector3();
+let rotationSpeed = 0;   // <-- STEADY ROTATION SPEED
 
-let rotationVelocity = 0;
-const ROTATION_DAMPING = 0.95;
-const ROTATION_GAIN = 0.06;
+const ROTATION_MAX = 0.015;
 
 const raycaster = new THREE.Raycaster();
 const mouse = new THREE.Vector2();
 
 /* ============================================================
-   HELPERS
+   Helpers
 ============================================================ */
 
 function modalityDisplayName(full) {
   const i = full.lastIndexOf("_");
-  return i === -1 ? full : full.slice(i + 1);
+  return i === -1 ? full : full.slice(i+1);
 }
 
 function modalityColor(label) {
@@ -192,229 +149,105 @@ function makeLabel(text) {
   ctx.fillStyle = "#fff";
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  ctx.fillText(text, 128, 128);
+  ctx.fillText(text,128,128);
   const tex = new THREE.CanvasTexture(c);
-  const mat = new THREE.SpriteMaterial({ map: tex, transparent: true });
+  const mat = new THREE.SpriteMaterial({ map: tex });
   const s = new THREE.Sprite(mat);
-  s.scale.set(1.2, 1.2, 1.2);
+  s.scale.set(1.2,1.2,1.2);
   return s;
 }
 
 /* ============================================================
-   CSV LOADING
+   CSV
 ============================================================ */
 
-fetch(CSV_URL)
-  .then(r => r.text())
-  .then(parseCSV)
-  .finally(init);
-
-function parseCSV(t) {
-  const lines = t.trim().split("\n");
-  const h = lines[0].split(",");
-  rows = lines.slice(1).map(l => {
-    const p = l.split(",");
-    const o = {};
+fetch(CSV_URL).then(r=>r.text()).then(t=>{
+  const lines=t.trim().split("\n");
+  const h=lines[0].split(",");
+  rows=lines.slice(1).map(l=>{
+    const p=l.split(",");
+    const o={};
     h.forEach((k,i)=>o[k]=parseFloat(p[i]));
     return o;
   });
-  timeValues = rows.map(r=>r.time);
-  pairKeys = h.filter(k=>k!=="time");
-  modalities = [...new Set(pairKeys.flatMap(k=>k.split("__")))];
-  currentTime = timeValues[0];
-}
+  timeValues=rows.map(r=>r.time);
+  pairKeys=h.filter(k=>k!=="time");
+  modalities=[...new Set(pairKeys.flatMap(k=>k.split("__")))];
+  currentTime=timeValues[0];
+  init();
+});
 
 /* ============================================================
-   INIT
+   Init
 ============================================================ */
 
-function init() {
-
+function init(){
   modalities.forEach((name,i)=>{
-    const phi = Math.acos(1 - 2*(i+0.5)/modalities.length);
-    const theta = Math.PI*(1+Math.sqrt(5))*i;
-    const pos = new THREE.Vector3(
-      SPHERE_RADIUS*Math.sin(phi)*Math.cos(theta),
-      SPHERE_RADIUS*Math.sin(phi)*Math.sin(theta),
-      SPHERE_RADIUS*Math.cos(phi)
+    const phi=Math.acos(1-2*(i+0.5)/modalities.length);
+    const theta=Math.PI*(1+Math.sqrt(5))*i;
+    const pos=new THREE.Vector3(
+      2.6*Math.sin(phi)*Math.cos(theta),
+      2.6*Math.sin(phi)*Math.sin(theta),
+      2.6*Math.cos(phi)
     );
 
-    const labelText = modalityDisplayName(name);
-    const color = modalityColor(labelText);
-
-    const node = new THREE.Mesh(
-      new THREE.SphereGeometry(NODE_RADIUS,24,24),
-      new THREE.MeshBasicMaterial({ color })
+    const node=new THREE.Mesh(
+      new THREE.SphereGeometry(0.22,24,24),
+      new THREE.MeshBasicMaterial({ color: modalityColor(modalityDisplayName(name)) })
     );
     node.position.copy(pos);
     group.add(node);
-    nodes[name] = node;
-    originalPositions[name] = pos.clone();
+    nodes[name]=node;
+    originalPositions[name]=pos.clone();
 
-    const lbl = makeLabel(labelText);
-    lbl.position.copy(pos).add(new THREE.Vector3(0, NODE_RADIUS + 0.35, 0));
+    const lbl=makeLabel(modalityDisplayName(name));
+    lbl.position.copy(pos).add(new THREE.Vector3(0,0.6,0));
     group.add(lbl);
-    labels[name] = lbl;
+    labels[name]=lbl;
   });
 
-  pairKeys.forEach(k=>{
-    const geom = new THREE.CylinderGeometry(1,1,1,16,1,true);
-    geom.setAttribute("color",
-      new THREE.BufferAttribute(
-        new Float32Array(geom.attributes.position.count*3),3
-      )
-    );
-    const mat = new THREE.MeshBasicMaterial({
-      vertexColors:true,
-      transparent:true,
-      opacity:0.2
-    });
-    const m = new THREE.Mesh(geom,mat);
-    group.add(m);
-    edges[k] = m;
-  });
-
-  setupUI();
-  updateEdges(currentTime);
   animate();
 }
 
 /* ============================================================
-   CLICK INTERACTION
+   Click handling
 ============================================================ */
 
-window.addEventListener("click", (event) => {
-  mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
-  mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+window.addEventListener("click", (e)=>{
+  mouse.x=(e.clientX/innerWidth)*2-1;
+  mouse.y=-(e.clientY/innerHeight)*2+1;
+  raycaster.setFromCamera(mouse,camera);
 
-  raycaster.setFromCamera(mouse, camera);
-  const hits = raycaster.intersectObjects(Object.values(nodes));
-
-  if (hits.length > 0) {
-    const obj = hits[0].object;
-    const name = Object.keys(nodes).find(k => nodes[k] === obj);
-    if (name) toggleFocus(name);
+  const hits=raycaster.intersectObjects(Object.values(nodes));
+  if(hits.length){
+    // click node → stop rotation
+    rotationSpeed = 0;
+    focused = null;
     return;
   }
 
-  // click on empty space → spin
-  focused = null;
-  targetQuat.copy(IDENTITY_QUAT);
-  targetPos.set(0,0,0);
-
-  const dist = Math.min(Math.sqrt(mouse.x*mouse.x + mouse.y*mouse.y), 1.0);
-  const dir = mouse.x >= 0 ? 1 : -1;
-  rotationVelocity = dir * dist * ROTATION_GAIN;
+  // click empty → start steady rotation
+  const dist=Math.min(Math.sqrt(mouse.x*mouse.x+mouse.y*mouse.y),1);
+  const dir=mouse.x>=0?1:-1;
+  rotationSpeed = dir * dist * ROTATION_MAX;
 });
 
-function toggleFocus(name) {
-  if (focused === name) {
-    focused = null;
-    targetQuat.copy(IDENTITY_QUAT);
-    targetPos.set(0,0,0);
-  } else {
-    focused = name;
-    const dir = originalPositions[name].clone().normalize();
-    targetQuat.copy(
-      new THREE.Quaternion().setFromUnitVectors(dir, new THREE.Vector3(0,0,1))
-    );
-    targetPos.set(0,0,-FOCUS_DEPTH);
-  }
-}
-
 /* ============================================================
-   EDGE UPDATE
+   Animation
 ============================================================ */
-
-function updateEdgeCylinder(edge,p1,p2,c1,c2,thickness){
-  const dir = new THREE.Vector3().subVectors(p2,p1);
-  const len = dir.length();
-  if(len <= 2*NODE_RADIUS){ edge.visible=false; return; }
-  dir.normalize();
-  const usable = len - 2*NODE_RADIUS;
-  edge.position.copy(p1).addScaledVector(dir, NODE_RADIUS + usable/2);
-  edge.scale.set(thickness, usable, thickness);
-  edge.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0), dir);
-
-  const colArr = edge.geometry.attributes.color.array;
-  const posArr = edge.geometry.attributes.position.array;
-  for(let i=0;i<posArr.length;i+=3){
-    const t = posArr[i+1] + 0.5;
-    const col = c1.clone().lerp(c2, t);
-    colArr[i]=col.r; colArr[i+1]=col.g; colArr[i+2]=col.b;
-  }
-  edge.geometry.attributes.color.needsUpdate = true;
-}
-
-function updateEdges(t){
-  let idx=0,best=1e9;
-  for(let i=0;i<timeValues.length;i++){
-    const d=Math.abs(timeValues[i]-t);
-    if(d<best){best=d;idx=i;}
-  }
-  document.getElementById("timeLabel").textContent =
-    `t = ${(timeValues[idx]/10).toFixed(2)} sec`;
-
-  pairKeys.forEach(k=>{
-    const v = rows[idx]?.[k];
-    const e = edges[k];
-    if(!isFinite(v)){ e.visible=false; return; }
-    e.visible=true;
-    const [a,b] = k.split("__");
-    const thickness = EDGE_MIN + Math.pow(v,1.3)*(EDGE_MAX-EDGE_MIN);
-    updateEdgeCylinder(
-      e,
-      nodes[a].position,
-      nodes[b].position,
-      nodes[a].material.color,
-      nodes[b].material.color,
-      thickness
-    );
-    e.material.opacity = 0.15 + 0.85*v;
-  });
-}
-
-/* ============================================================
-   UI + ANIMATION LOOP
-============================================================ */
-
-function setupUI(){
-  const s=document.getElementById("timeSlider");
-  const b=document.getElementById("playBtn");
-  s.min=timeValues[0];
-  s.max=timeValues.at(-1);
-  s.step=(s.max-s.min)/1000;
-  s.value=currentTime;
-  s.oninput=()=>{
-    currentTime=parseFloat(s.value);
-    isPlaying=false;
-    b.textContent="▶ Play";
-    updateEdges(currentTime);
-  };
-  b.onclick=()=>{
-    isPlaying=!isPlaying;
-    b.textContent=isPlaying?"⏸ Pause":"▶ Play";
-  };
-}
 
 let last=performance.now();
 function animate(now=performance.now()){
   requestAnimationFrame(animate);
   const dt=(now-last)/1000; last=now;
 
-  if(isPlaying){
-    currentTime+=direction*playSpeed*dt*10;
-    if(currentTime>=timeValues.at(-1)){currentTime=timeValues.at(-1);direction=-1;}
-    if(currentTime<=timeValues[0]){currentTime=timeValues[0];direction=1;}
-    document.getElementById("timeSlider").value=currentTime;
-    updateEdges(currentTime);
-  }
+  // timeline autoplay
+  currentTime += direction*dt*10;
+  if(currentTime>=timeValues.at(-1)){currentTime=timeValues.at(-1);direction=-1;}
+  if(currentTime<=timeValues[0]){currentTime=timeValues[0];direction=1;}
 
-  group.quaternion.slerp(targetQuat,0.08);
-  group.position.lerp(targetPos,0.08);
-
-  group.rotation.y += rotationVelocity;
-  rotationVelocity *= ROTATION_DAMPING;
+  // STEADY rotation
+  group.rotation.y += rotationSpeed;
 
   Object.values(labels).forEach(l=>{
     const d=camera.position.distanceTo(l.position);
