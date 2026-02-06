@@ -86,15 +86,13 @@
 
 <script>
 /* ============================================================
-   URL parameters
+   URL PARAMETERS
 ============================================================ */
 
 const params = new URLSearchParams(window.location.search);
 const CSV_URL = params.get("csv") || "modality_agreement_timeseries.csv";
 const TITLE   = params.get("title");
 const LINK    = params.get("link");
-
-/* ---- title handling ---- */
 
 const titleDiv = document.getElementById("title");
 if (TITLE) {
@@ -112,7 +110,7 @@ if (TITLE) {
 }
 
 /* ============================================================
-   Scene / Camera / Renderer
+   SCENE / CAMERA / RENDERER
 ============================================================ */
 
 const scene = new THREE.Scene();
@@ -133,7 +131,7 @@ addEventListener("resize", () => {
 });
 
 /* ============================================================
-   Globals
+   GLOBALS
 ============================================================ */
 
 const group = new THREE.Group();
@@ -162,11 +160,15 @@ const targetQuat = new THREE.Quaternion();
 const IDENTITY_QUAT = new THREE.Quaternion();
 const targetPos = new THREE.Vector3();
 
+let rotationVelocity = 0;
+const ROTATION_DAMPING = 0.95;
+const ROTATION_GAIN = 0.06;
+
 const raycaster = new THREE.Raycaster();
 const mouse = new THREE.Vector2();
 
 /* ============================================================
-   Helpers
+   HELPERS
 ============================================================ */
 
 function modalityDisplayName(full) {
@@ -199,7 +201,7 @@ function makeLabel(text) {
 }
 
 /* ============================================================
-   CSV loading
+   CSV LOADING
 ============================================================ */
 
 fetch(CSV_URL)
@@ -223,7 +225,7 @@ function parseCSV(t) {
 }
 
 /* ============================================================
-   Init
+   INIT
 ============================================================ */
 
 function init() {
@@ -278,7 +280,7 @@ function init() {
 }
 
 /* ============================================================
-   Focus handling (click)
+   CLICK INTERACTION
 ============================================================ */
 
 window.addEventListener("click", (event) => {
@@ -287,13 +289,22 @@ window.addEventListener("click", (event) => {
 
   raycaster.setFromCamera(mouse, camera);
   const hits = raycaster.intersectObjects(Object.values(nodes));
-  if (!hits.length) return;
 
-  const obj = hits[0].object;
-  const name = Object.keys(nodes).find(k => nodes[k] === obj);
-  if (!name) return;
+  if (hits.length > 0) {
+    const obj = hits[0].object;
+    const name = Object.keys(nodes).find(k => nodes[k] === obj);
+    if (name) toggleFocus(name);
+    return;
+  }
 
-  toggleFocus(name);
+  // click on empty space → spin
+  focused = null;
+  targetQuat.copy(IDENTITY_QUAT);
+  targetPos.set(0,0,0);
+
+  const dist = Math.min(Math.sqrt(mouse.x*mouse.x + mouse.y*mouse.y), 1.0);
+  const dir = mouse.x >= 0 ? 1 : -1;
+  rotationVelocity = dir * dist * ROTATION_GAIN;
 });
 
 function toggleFocus(name) {
@@ -312,7 +323,7 @@ function toggleFocus(name) {
 }
 
 /* ============================================================
-   Edge update
+   EDGE UPDATE
 ============================================================ */
 
 function updateEdgeCylinder(edge,p1,p2,c1,c2,thickness){
@@ -364,7 +375,7 @@ function updateEdges(t){
 }
 
 /* ============================================================
-   UI + animation
+   UI + ANIMATION LOOP
 ============================================================ */
 
 function setupUI(){
@@ -401,7 +412,9 @@ function animate(now=performance.now()){
 
   group.quaternion.slerp(targetQuat,0.08);
   group.position.lerp(targetPos,0.08);
-  group.rotation.y += 0.002;
+
+  group.rotation.y += rotationVelocity;
+  rotationVelocity *= ROTATION_DAMPING;
 
   Object.values(labels).forEach(l=>{
     const d=camera.position.distanceTo(l.position);
