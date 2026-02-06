@@ -42,6 +42,7 @@
     display: flex;
     flex-direction: column;
     gap: 6px;
+    z-index: 10;
   }
 
   #controls {
@@ -89,26 +90,24 @@
 ============================================================ */
 
 const params = new URLSearchParams(window.location.search);
-
 const CSV_URL = params.get("csv") || "modality_agreement_timeseries.csv";
 const TITLE   = params.get("title");
 const LINK    = params.get("link");
 
-/* ---- Title handling ---- */
+/* ---- title handling ---- */
 
 const titleDiv = document.getElementById("title");
-
 if (TITLE) {
-  const decodedTitle = decodeURIComponent(TITLE);
+  const t = decodeURIComponent(TITLE);
   if (LINK) {
     const a = document.createElement("a");
     a.href = decodeURIComponent(LINK);
     a.target = "_blank";
     a.rel = "noopener noreferrer";
-    a.textContent = decodedTitle;
+    a.textContent = t;
     titleDiv.appendChild(a);
   } else {
-    titleDiv.textContent = decodedTitle;
+    titleDiv.textContent = t;
   }
 }
 
@@ -124,6 +123,7 @@ camera.position.set(0, 0, 7);
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(innerWidth, innerHeight);
+renderer.setPixelRatio(window.devicePixelRatio);
 document.body.appendChild(renderer.domElement);
 
 addEventListener("resize", () => {
@@ -150,11 +150,20 @@ const SPHERE_RADIUS = 2.6;
 const NODE_RADIUS   = 0.22;
 const EDGE_MIN = 0.015;
 const EDGE_MAX = 0.10;
+const FOCUS_DEPTH = 3.0;
 
 let currentTime = 0;
 let isPlaying = true;
 let direction = 1;
 const playSpeed = 1.0;
+
+let focused = null;
+const targetQuat = new THREE.Quaternion();
+const IDENTITY_QUAT = new THREE.Quaternion();
+const targetPos = new THREE.Vector3();
+
+const raycaster = new THREE.Raycaster();
+const mouse = new THREE.Vector2();
 
 /* ============================================================
    Helpers
@@ -190,21 +199,12 @@ function makeLabel(text) {
 }
 
 /* ============================================================
-   Load CSV (DEFAULT or URL)
+   CSV loading
 ============================================================ */
 
 fetch(CSV_URL)
-  .then(r => {
-    if (!r.ok) throw new Error("CSV not found");
-    return r.text();
-  })
+  .then(r => r.text())
   .then(parseCSV)
-  .catch(err => {
-    console.error("CSV load error:", err);
-    modalities = [];
-    timeValues = [0];
-    pairKeys = [];
-  })
   .finally(init);
 
 function parseCSV(t) {
@@ -223,7 +223,7 @@ function parseCSV(t) {
 }
 
 /* ============================================================
-   Init (nodes / edges)
+   Init
 ============================================================ */
 
 function init() {
@@ -244,16 +244,15 @@ function init() {
       new THREE.SphereGeometry(NODE_RADIUS,24,24),
       new THREE.MeshBasicMaterial({ color })
     );
-
     node.position.copy(pos);
     group.add(node);
-    nodes[name]=node;
-    originalPositions[name]=pos.clone();
+    nodes[name] = node;
+    originalPositions[name] = pos.clone();
 
     const lbl = makeLabel(labelText);
-    lbl.position.copy(pos).add(new THREE.Vector3(0,NODE_RADIUS+0.35,0));
+    lbl.position.copy(pos).add(new THREE.Vector3(0, NODE_RADIUS + 0.35, 0));
     group.add(lbl);
-    labels[name]=lbl;
+    labels[name] = lbl;
   });
 
   pairKeys.forEach(k=>{
@@ -270,7 +269,7 @@ function init() {
     });
     const m = new THREE.Mesh(geom,mat);
     group.add(m);
-    edges[k]=m;
+    edges[k] = m;
   });
 
   setupUI();
@@ -279,27 +278,61 @@ function init() {
 }
 
 /* ============================================================
-   Edge update + playback
+   Focus handling (click)
+============================================================ */
+
+window.addEventListener("click", (event) => {
+  mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+  mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+
+  raycaster.setFromCamera(mouse, camera);
+  const hits = raycaster.intersectObjects(Object.values(nodes));
+  if (!hits.length) return;
+
+  const obj = hits[0].object;
+  const name = Object.keys(nodes).find(k => nodes[k] === obj);
+  if (!name) return;
+
+  toggleFocus(name);
+});
+
+function toggleFocus(name) {
+  if (focused === name) {
+    focused = null;
+    targetQuat.copy(IDENTITY_QUAT);
+    targetPos.set(0,0,0);
+  } else {
+    focused = name;
+    const dir = originalPositions[name].clone().normalize();
+    targetQuat.copy(
+      new THREE.Quaternion().setFromUnitVectors(dir, new THREE.Vector3(0,0,1))
+    );
+    targetPos.set(0,0,-FOCUS_DEPTH);
+  }
+}
+
+/* ============================================================
+   Edge update
 ============================================================ */
 
 function updateEdgeCylinder(edge,p1,p2,c1,c2,thickness){
   const dir = new THREE.Vector3().subVectors(p2,p1);
   const len = dir.length();
-  if(len<=2*NODE_RADIUS){ edge.visible=false; return;}
+  if(len <= 2*NODE_RADIUS){ edge.visible=false; return; }
   dir.normalize();
-  const usable = len-2*NODE_RADIUS;
-  edge.position.copy(p1).addScaledVector(dir,NODE_RADIUS+usable/2);
-  edge.scale.set(thickness,usable,thickness);
-  edge.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0),dir);
+  const usable = len - 2*NODE_RADIUS;
+  edge.position.copy(p1).addScaledVector(dir, NODE_RADIUS + usable/2);
+  edge.scale.set(thickness, usable, thickness);
+  edge.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0), dir);
 
   const colArr = edge.geometry.attributes.color.array;
   const posArr = edge.geometry.attributes.position.array;
   for(let i=0;i<posArr.length;i+=3){
-    const t = posArr[i+1]+0.5;
-    const col = c1.clone().lerp(c2,t);
+    const t = posArr[i+1] + 0.5;
+    const col = c1.clone().lerp(c2, t);
     colArr[i]=col.r; colArr[i+1]=col.g; colArr[i+2]=col.b;
   }
-  edge.geometry.attributes.color.needsUpdate=true;
+  edge.geometry.attributes.color.needsUpdate = true;
 }
 
 function updateEdges(t){
@@ -312,12 +345,12 @@ function updateEdges(t){
     `t = ${(timeValues[idx]/10).toFixed(2)} sec`;
 
   pairKeys.forEach(k=>{
-    const v=rows[idx]?.[k];
-    const e=edges[k];
-    if(!isFinite(v)){e.visible=false;return;}
+    const v = rows[idx]?.[k];
+    const e = edges[k];
+    if(!isFinite(v)){ e.visible=false; return; }
     e.visible=true;
-    const [a,b]=k.split("__");
-    const thickness=EDGE_MIN+Math.pow(v,1.3)*(EDGE_MAX-EDGE_MIN);
+    const [a,b] = k.split("__");
+    const thickness = EDGE_MIN + Math.pow(v,1.3)*(EDGE_MAX-EDGE_MIN);
     updateEdgeCylinder(
       e,
       nodes[a].position,
@@ -326,12 +359,12 @@ function updateEdges(t){
       nodes[b].material.color,
       thickness
     );
-    e.material.opacity=0.15+0.85*v;
+    e.material.opacity = 0.15 + 0.85*v;
   });
 }
 
 /* ============================================================
-   UI + animation loop
+   UI + animation
 ============================================================ */
 
 function setupUI(){
@@ -366,7 +399,16 @@ function animate(now=performance.now()){
     updateEdges(currentTime);
   }
 
-  group.rotation.y+=0.002;
+  group.quaternion.slerp(targetQuat,0.08);
+  group.position.lerp(targetPos,0.08);
+  group.rotation.y += 0.002;
+
+  Object.values(labels).forEach(l=>{
+    const d=camera.position.distanceTo(l.position);
+    const s=THREE.MathUtils.clamp(6/d,0.6,1.4);
+    l.scale.set(s,s,s);
+  });
+
   renderer.render(scene,camera);
 }
 </script>
