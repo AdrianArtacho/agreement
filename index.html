@@ -12,6 +12,27 @@
     color: #eee;
     font-family: sans-serif;
   }
+
+  #title {
+    position: absolute;
+    top: 14px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 18px;
+    text-align: center;
+    z-index: 10;
+  }
+
+  #title a {
+    color: #eee;
+    text-decoration: none;
+    border-bottom: 1px solid #666;
+  }
+
+  #title a:hover {
+    border-bottom-color: #aaa;
+  }
+
   #ui {
     position: absolute;
     bottom: 20px;
@@ -22,11 +43,13 @@
     flex-direction: column;
     gap: 6px;
   }
+
   #controls {
     display: flex;
     justify-content: center;
     gap: 12px;
   }
+
   button {
     background: #222;
     color: #eee;
@@ -34,9 +57,11 @@
     padding: 4px 10px;
     cursor: pointer;
   }
+
   button:hover {
     background: #333;
   }
+
   #timeLabel {
     text-align: center;
     font-size: 14px;
@@ -45,6 +70,8 @@
 </head>
 
 <body>
+
+<div id="title"></div>
 
 <div id="ui">
   <div id="timeLabel">t = 0.00 sec</div>
@@ -57,6 +84,34 @@
 <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
 
 <script>
+/* ============================================================
+   URL parameters
+============================================================ */
+
+const params = new URLSearchParams(window.location.search);
+
+const CSV_URL = params.get("csv") || "modality_agreement_timeseries.csv";
+const TITLE   = params.get("title");
+const LINK    = params.get("link");
+
+/* ---- Title handling ---- */
+
+const titleDiv = document.getElementById("title");
+
+if (TITLE) {
+  const decodedTitle = decodeURIComponent(TITLE);
+  if (LINK) {
+    const a = document.createElement("a");
+    a.href = decodeURIComponent(LINK);
+    a.target = "_blank";
+    a.rel = "noopener noreferrer";
+    a.textContent = decodedTitle;
+    titleDiv.appendChild(a);
+  } else {
+    titleDiv.textContent = decodedTitle;
+  }
+}
+
 /* ============================================================
    Scene / Camera / Renderer
 ============================================================ */
@@ -95,11 +150,9 @@ const SPHERE_RADIUS = 2.6;
 const NODE_RADIUS   = 0.22;
 const EDGE_MIN = 0.015;
 const EDGE_MAX = 0.10;
-const ANIM_SPEED = 0.08;
-const FOCUS_DEPTH = 3.0;
 
 let currentTime = 0;
-let isPlaying = true;   // ▶ AUTOPLAY ON LOAD
+let isPlaying = true;
 let direction = 1;
 const playSpeed = 1.0;
 
@@ -114,15 +167,11 @@ function modalityDisplayName(full) {
 
 function modalityColor(label) {
   label = label.toLowerCase();
-  if (label.includes("mpipe")) return new THREE.Color(0xffc0c0); // soft red
-  if (label.includes("audio")) return new THREE.Color(0x9fb7ff); // clearer blue
-  if (label.includes("imu"))   return new THREE.Color(0xc8f0c8); // soft green
+  if (label.includes("mpipe")) return new THREE.Color(0xffc0c0);
+  if (label.includes("audio")) return new THREE.Color(0x9fb7ff);
+  if (label.includes("imu"))   return new THREE.Color(0xc8f0c8);
   return new THREE.Color(0xffffff);
 }
-
-/* ============================================================
-   Label helper
-============================================================ */
 
 function makeLabel(text) {
   const c = document.createElement("canvas");
@@ -141,15 +190,19 @@ function makeLabel(text) {
 }
 
 /* ============================================================
-   CSV
+   Load CSV (DEFAULT or URL)
 ============================================================ */
 
-fetch("modality_agreement_timeseries.csv")
-  .then(r => r.text())
+fetch(CSV_URL)
+  .then(r => {
+    if (!r.ok) throw new Error("CSV not found");
+    return r.text();
+  })
   .then(parseCSV)
-  .catch(() => {
-    modalities = ["exp5b_pdps_imu-Clip","exp5b_mpipe-R","exp5b_audio-L"];
-    timeValues = [0,100];
+  .catch(err => {
+    console.error("CSV load error:", err);
+    modalities = [];
+    timeValues = [0];
     pairKeys = [];
   })
   .finally(init);
@@ -170,7 +223,7 @@ function parseCSV(t) {
 }
 
 /* ============================================================
-   Init
+   Init (nodes / edges)
 ============================================================ */
 
 function init() {
@@ -191,6 +244,7 @@ function init() {
       new THREE.SphereGeometry(NODE_RADIUS,24,24),
       new THREE.MeshBasicMaterial({ color })
     );
+
     node.position.copy(pos);
     group.add(node);
     nodes[name]=node;
@@ -204,8 +258,7 @@ function init() {
 
   pairKeys.forEach(k=>{
     const geom = new THREE.CylinderGeometry(1,1,1,16,1,true);
-    geom.setAttribute(
-      "color",
+    geom.setAttribute("color",
       new THREE.BufferAttribute(
         new Float32Array(geom.attributes.position.count*3),3
       )
@@ -226,7 +279,7 @@ function init() {
 }
 
 /* ============================================================
-   Gradient edge update
+   Edge update + playback
 ============================================================ */
 
 function updateEdgeCylinder(edge,p1,p2,c1,c2,thickness){
@@ -239,19 +292,15 @@ function updateEdgeCylinder(edge,p1,p2,c1,c2,thickness){
   edge.scale.set(thickness,usable,thickness);
   edge.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0),dir);
 
-  const colors = edge.geometry.attributes.color.array;
-  const pos = edge.geometry.attributes.position.array;
-  for(let i=0;i<pos.length;i+=3){
-    const t = pos[i+1]+0.5;
+  const colArr = edge.geometry.attributes.color.array;
+  const posArr = edge.geometry.attributes.position.array;
+  for(let i=0;i<posArr.length;i+=3){
+    const t = posArr[i+1]+0.5;
     const col = c1.clone().lerp(c2,t);
-    colors[i]=col.r; colors[i+1]=col.g; colors[i+2]=col.b;
+    colArr[i]=col.r; colArr[i+1]=col.g; colArr[i+2]=col.b;
   }
   edge.geometry.attributes.color.needsUpdate=true;
 }
-
-/* ============================================================
-   Time update
-============================================================ */
 
 function updateEdges(t){
   let idx=0,best=1e9;
@@ -282,7 +331,7 @@ function updateEdges(t){
 }
 
 /* ============================================================
-   UI + Animation
+   UI + animation loop
 ============================================================ */
 
 function setupUI(){
@@ -318,13 +367,6 @@ function animate(now=performance.now()){
   }
 
   group.rotation.y+=0.002;
-
-  Object.values(labels).forEach(l=>{
-    const d=camera.position.distanceTo(l.position);
-    const s=THREE.MathUtils.clamp(6/d,0.6,1.4);
-    l.scale.set(s,s,s);
-  });
-
   renderer.render(scene,camera);
 }
 </script>
