@@ -5,47 +5,16 @@
 <title>3D Modality Agreement</title>
 
 <style>
-  body {
-    margin: 0;
-    overflow: hidden;
-    background: #111;
-    color: #eee;
-    font-family: sans-serif;
-  }
-
-  #title {
-    position: absolute;
-    top: 14px;
-    left: 50%;
-    transform: translateX(-50%);
-    font-size: 18px;
-    z-index: 10;
-  }
-
-  #title a {
-    color: #eee;
-    text-decoration: none;
-    border-bottom: 1px solid #666;
-  }
-
-  #ui {
-    position: absolute;
-    bottom: 20px;
-    left: 50%;
-    transform: translateX(-50%);
-    width: 80%;
-    z-index: 10;
-  }
-
-  #timeLabel {
-    text-align: center;
-    font-size: 14px;
-  }
+  body { margin:0; overflow:hidden; background:#111; color:#eee; font-family:sans-serif; }
+  #title { position:absolute; top:14px; left:50%; transform:translateX(-50%); font-size:18px; z-index:10; }
+  #title a { color:#eee; text-decoration:none; border-bottom:1px solid #666; }
+  #title a:hover { border-bottom-color:#aaa; }
+  #ui { position:absolute; bottom:20px; left:50%; transform:translateX(-50%); width:80%; z-index:10; }
+  #timeLabel { text-align:center; font-size:14px; }
 </style>
 </head>
 
 <body>
-
 <div id="title"></div>
 
 <div id="ui">
@@ -59,7 +28,6 @@
 /* ============================================================
    URL PARAMS
 ============================================================ */
-
 const params = new URLSearchParams(window.location.search);
 const CSV_URL = params.get("csv") || "modality_agreement_timeseries.csv";
 const TITLE = params.get("title");
@@ -72,6 +40,7 @@ if (TITLE) {
     const a = document.createElement("a");
     a.href = decodeURIComponent(LINK);
     a.target = "_blank";
+    a.rel = "noopener noreferrer";
     a.textContent = t;
     titleDiv.appendChild(a);
   } else {
@@ -80,39 +49,45 @@ if (TITLE) {
 }
 
 /* ============================================================
-   SCENE
+   SCENE / CAMERA / RENDERER
 ============================================================ */
-
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x111111);
 
-const camera = new THREE.PerspectiveCamera(70, innerWidth / innerHeight, 0.1, 100);
-camera.position.set(0, 0, 7);
+const camera = new THREE.PerspectiveCamera(70, innerWidth/innerHeight, 0.1, 100);
+camera.position.set(0,0,7);
 
-const renderer = new THREE.WebGLRenderer({ antialias: true });
+const renderer = new THREE.WebGLRenderer({ antialias:true });
 renderer.setSize(innerWidth, innerHeight);
 renderer.setPixelRatio(window.devicePixelRatio);
 document.body.appendChild(renderer.domElement);
 
 addEventListener("resize", () => {
-  camera.aspect = innerWidth / innerHeight;
+  camera.aspect = innerWidth/innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
 });
 
 /* ============================================================
+   GROUPS (IMPORTANT FIX)
+   focusGroup: focus rotation + forward translation
+   spinGroup: steady Y rotation
+============================================================ */
+const focusGroup = new THREE.Group();
+scene.add(focusGroup);
+
+const spinGroup = new THREE.Group();
+focusGroup.add(spinGroup);
+
+/* ============================================================
    GLOBALS
 ============================================================ */
-
-const group = new THREE.Group();
-scene.add(group);
-
 const nodes = {};
 const labels = {};
 const edges = {};
 const originalPositions = {};
 
-let rows = [], timeValues = [], pairKeys = [], modalities = [];
+let rows=[], timeValues=[], pairKeys=[], modalities=[];
 let currentTime = 0;
 let direction = 1;
 
@@ -134,10 +109,9 @@ const mouse = new THREE.Vector2();
 /* ============================================================
    HELPERS
 ============================================================ */
-
 function modalityDisplayName(full) {
   const i = full.lastIndexOf("_");
-  return i === -1 ? full : full.slice(i + 1);
+  return i === -1 ? full : full.slice(i+1);
 }
 
 function modalityColor(label) {
@@ -158,39 +132,46 @@ function makeLabel(text) {
   ctx.textBaseline = "middle";
   ctx.fillText(text, 128, 128);
   const tex = new THREE.CanvasTexture(c);
-  const mat = new THREE.SpriteMaterial({ map: tex });
+  const mat = new THREE.SpriteMaterial({ map: tex, transparent: true });
   const s = new THREE.Sprite(mat);
-  s.scale.set(1.2, 1.2, 1.2);
+  s.scale.set(1.2,1.2,1.2);
   return s;
 }
 
 /* ============================================================
-   CSV
+   CSV LOAD
 ============================================================ */
-
-fetch(CSV_URL).then(r => r.text()).then(t => {
+fetch(CSV_URL).then(r => {
+  if (!r.ok) throw new Error("CSV not found");
+  return r.text();
+}).then(t => {
   const lines = t.trim().split("\n");
   const h = lines[0].split(",");
   rows = lines.slice(1).map(l => {
     const p = l.split(",");
     const o = {};
-    h.forEach((k,i) => o[k] = parseFloat(p[i]));
+    h.forEach((k,i)=> o[k]=parseFloat(p[i]));
     return o;
   });
-  timeValues = rows.map(r => r.time);
-  pairKeys = h.filter(k => k !== "time");
-  modalities = [...new Set(pairKeys.flatMap(k => k.split("__")))];
+  timeValues = rows.map(r=>r.time);
+  pairKeys = h.filter(k=>k!=="time");
+  modalities = [...new Set(pairKeys.flatMap(k=>k.split("__")))];
   currentTime = timeValues[0];
   init();
+}).catch(err => {
+  console.error(err);
 });
 
 /* ============================================================
    INIT
 ============================================================ */
-
 function init() {
+  // reset focus targets
+  targetQuat.copy(IDENTITY_QUAT);
+  targetPos.set(0,0,0);
 
-  modalities.forEach((name,i) => {
+  // nodes + labels
+  modalities.forEach((name,i)=>{
     const phi = Math.acos(1 - 2*(i+0.5)/modalities.length);
     const theta = Math.PI*(1+Math.sqrt(5))*i;
     const pos = new THREE.Vector3(
@@ -199,34 +180,38 @@ function init() {
       2.6*Math.cos(phi)
     );
 
+    const labelText = modalityDisplayName(name);
+
     const node = new THREE.Mesh(
-      new THREE.SphereGeometry(NODE_RADIUS, 24, 24),
-      new THREE.MeshBasicMaterial({ color: modalityColor(modalityDisplayName(name)) })
+      new THREE.SphereGeometry(NODE_RADIUS,24,24),
+      new THREE.MeshBasicMaterial({ color: modalityColor(labelText) })
     );
     node.position.copy(pos);
-    group.add(node);
-    nodes[name] = node;
-    originalPositions[name] = pos.clone();
+    spinGroup.add(node);
+    nodes[name]=node;
+    originalPositions[name]=pos.clone();
 
-    const lbl = makeLabel(modalityDisplayName(name));
-    lbl.position.copy(pos).add(new THREE.Vector3(0, 0.6, 0));
-    group.add(lbl);
-    labels[name] = lbl;
+    const lbl = makeLabel(labelText);
+    lbl.position.copy(pos).add(new THREE.Vector3(0,0.6,0));
+    spinGroup.add(lbl);
+    labels[name]=lbl;
   });
 
-  pairKeys.forEach(k => {
+  // edges (gradient vertex colors)
+  pairKeys.forEach(k=>{
     const geom = new THREE.CylinderGeometry(1,1,1,16,1,true);
-    geom.setAttribute("color",
+    geom.setAttribute(
+      "color",
       new THREE.BufferAttribute(new Float32Array(geom.attributes.position.count*3),3)
     );
     const mat = new THREE.MeshBasicMaterial({
-      vertexColors: true,
-      transparent: true,
-      opacity: 0.2
+      vertexColors:true,
+      transparent:true,
+      opacity:0.2
     });
     const m = new THREE.Mesh(geom, mat);
-    group.add(m);
-    edges[k] = m;
+    spinGroup.add(m);
+    edges[k]=m;
   });
 
   setupUI();
@@ -236,23 +221,25 @@ function init() {
 /* ============================================================
    EDGE UPDATE
 ============================================================ */
-
 function updateEdgeCylinder(edge,p1,p2,c1,c2,thickness){
   const dir = new THREE.Vector3().subVectors(p2,p1);
   const len = dir.length();
   if (len <= 2*NODE_RADIUS) { edge.visible=false; return; }
+
   dir.normalize();
   const usable = len - 2*NODE_RADIUS;
+
   edge.position.copy(p1).addScaledVector(dir, NODE_RADIUS + usable/2);
   edge.scale.set(thickness, usable, thickness);
   edge.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0), dir);
 
   const col = edge.geometry.attributes.color.array;
   const pos = edge.geometry.attributes.position.array;
-  for (let i=0;i<pos.length;i+=3) {
-    const t = pos[i+1] + 0.5;
+
+  for (let i=0;i<pos.length;i+=3){
+    const t = pos[i+1] + 0.5; // [-0.5,0.5] -> [0,1]
     const cc = c1.clone().lerp(c2, t);
-    col[i] = cc.r; col[i+1] = cc.g; col[i+2] = cc.b;
+    col[i]=cc.r; col[i+1]=cc.g; col[i+2]=cc.b;
   }
   edge.geometry.attributes.color.needsUpdate = true;
 }
@@ -267,13 +254,15 @@ function updateEdges(t){
   document.getElementById("timeLabel").textContent =
     `t = ${(timeValues[idx]/10).toFixed(2)} sec`;
 
-  pairKeys.forEach(k => {
+  pairKeys.forEach(k=>{
     const v = rows[idx]?.[k];
     const e = edges[k];
     if (!isFinite(v)) { e.visible=false; return; }
     e.visible=true;
+
     const [a,b] = k.split("__");
     const thick = EDGE_MIN + Math.pow(v,1.3)*(EDGE_MAX-EDGE_MIN);
+
     updateEdgeCylinder(
       e,
       nodes[a].position,
@@ -282,6 +271,7 @@ function updateEdges(t){
       nodes[b].material.color,
       thick
     );
+
     e.material.opacity = 0.15 + 0.85*v;
   });
 }
@@ -289,14 +279,17 @@ function updateEdges(t){
 /* ============================================================
    INTERACTION
 ============================================================ */
-
 window.addEventListener("click", (e) => {
   mouse.x = (e.clientX / innerWidth) * 2 - 1;
   mouse.y = -(e.clientY / innerHeight) * 2 + 1;
+
   raycaster.setFromCamera(mouse, camera);
 
-  const hits = raycaster.intersectObjects(Object.values(nodes));
+  // IMPORTANT: nodes are inside spinGroup; raycaster works fine because they are in scene graph
+  const hits = raycaster.intersectObjects(Object.values(nodes), false);
+
   if (hits.length) {
+    // Click node: stop rotation + focus
     rotationSpeed = 0;
 
     const obj = hits[0].object;
@@ -304,28 +297,30 @@ window.addEventListener("click", (e) => {
     if (!name) return;
 
     focused = name;
+
+    // rotate so that clicked node direction becomes +Z
     const dir = originalPositions[name].clone().normalize();
     targetQuat.copy(
       new THREE.Quaternion().setFromUnitVectors(dir, new THREE.Vector3(0,0,1))
     );
+
     targetPos.set(0,0,-3.0);
     return;
   }
 
-  // empty space → steady rotation
+  // Click empty: release focus + start steady rotation
   focused = null;
   targetQuat.copy(IDENTITY_QUAT);
   targetPos.set(0,0,0);
 
   const dist = Math.min(Math.sqrt(mouse.x*mouse.x + mouse.y*mouse.y), 1);
-  const dir = mouse.x >= 0 ? 1 : -1;
-  rotationSpeed = dir * dist * ROTATION_MAX;
+  const sgn = mouse.x >= 0 ? 1 : -1;
+  rotationSpeed = sgn * dist * ROTATION_MAX;
 });
 
 /* ============================================================
    UI
 ============================================================ */
-
 function setupUI(){
   const s = document.getElementById("timeSlider");
   s.min = timeValues[0];
@@ -339,15 +334,15 @@ function setupUI(){
 }
 
 /* ============================================================
-   ANIMATION LOOP
+   ANIMATION
 ============================================================ */
-
 let last = performance.now();
 function animate(now = performance.now()){
   requestAnimationFrame(animate);
   const dt = (now - last) / 1000;
   last = now;
 
+  // autoplay time (tenths of a second)
   currentTime += direction * dt * 10;
   if (currentTime >= timeValues.at(-1)) { currentTime = timeValues.at(-1); direction = -1; }
   if (currentTime <= timeValues[0])     { currentTime = timeValues[0];     direction = 1; }
@@ -355,12 +350,16 @@ function animate(now = performance.now()){
   document.getElementById("timeSlider").value = currentTime;
   updateEdges(currentTime);
 
-  group.rotation.y += rotationSpeed;
-  group.quaternion.slerp(targetQuat, 0.08);
-  group.position.lerp(targetPos, 0.08);
+  // steady rotation ONLY on spinGroup (no conflict!)
+  spinGroup.rotation.y += rotationSpeed;
 
-  Object.values(labels).forEach(l => {
-    const d = camera.position.distanceTo(l.position);
+  // focus transform ONLY on focusGroup
+  focusGroup.quaternion.slerp(targetQuat, 0.08);
+  focusGroup.position.lerp(targetPos, 0.08);
+
+  // label scale for readability
+  Object.values(labels).forEach(l=>{
+    const d = camera.position.distanceTo(l.getWorldPosition(new THREE.Vector3()));
     const s = THREE.MathUtils.clamp(6/d, 0.6, 1.4);
     l.scale.set(s,s,s);
   });
